@@ -12,7 +12,6 @@ concurrency:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Job 1: Typecheck & Lint
-# Verifies TypeScript compiles cleanly and ESLint passes on src/
 # ─────────────────────────────────────────────────────────────────────────────
 jobs:
   typecheck-lint:
@@ -27,10 +26,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          # No cache: yarn — we have no yarn.lock. npm is used in CI.
 
       - name: Install dependencies
-        run: npm install --legacy-peer-deps
+        # --ignore-scripts prevents `prepare` (bob build) from running during install.
+        # The build is validated separately in the Build job.
+        run: npm install --ignore-scripts --legacy-peer-deps
 
       - name: Typecheck
         run: npm run typecheck
@@ -39,8 +39,7 @@ jobs:
         run: npm run lint
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Job 2: Build
-# Verifies bob compiles src/ to commonjs + esm + typescript outputs
+# Job 2: Build — verifies bob compiles src/ to all three output targets
 # ─────────────────────────────────────────────────────────────────────────────
   build:
     name: Build Package
@@ -56,12 +55,12 @@ jobs:
           node-version: 20
 
       - name: Install dependencies
-        run: npm install --legacy-peer-deps
+        run: npm install --ignore-scripts --legacy-peer-deps
 
       - name: Build
         run: npm run build
 
-      - name: Verify outputs exist
+      - name: Verify outputs
         run: |
           echo "=== CommonJS ==="
           ls lib/commonjs/
@@ -74,7 +73,7 @@ jobs:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Job 3: Android — structure & manifest validation
-# Full Kotlin compile requires a host app; we validate structure instead.
+# Full Kotlin compile requires a host app; we validate files & manifest instead.
 # ─────────────────────────────────────────────────────────────────────────────
   android-validate:
     name: Android Validate
@@ -84,12 +83,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Validate Kotlin source files
+      - name: Validate required Kotlin files exist
         run: |
-          echo "=== Kotlin source files ==="
-          find android/src -name "*.kt" | sort
-
-          echo "=== Checking required files exist ==="
           required=(
             "android/build.gradle"
             "android/src/main/AndroidManifest.xml"
@@ -101,39 +96,60 @@ jobs:
             "android/src/main/java/com/rick427/backgroundtimer/TimerStore.kt"
             "android/src/main/java/com/rick427/backgroundtimer/TimerData.kt"
           )
+          failed=0
           for f in "${required[@]}"; do
             if [ -f "$f" ]; then
               echo "  ✅ $f"
             else
               echo "  ❌ MISSING: $f"
-              exit 1
+              failed=1
             fi
           done
+          exit $failed
 
-      - name: Validate AndroidManifest permissions
+      - name: Validate AndroidManifest permissions & components
         run: |
-          echo "=== AndroidManifest.xml ==="
-          grep -E "uses-permission|service|receiver" android/src/main/AndroidManifest.xml
+          manifest="android/src/main/AndroidManifest.xml"
 
-          # Must declare foreground service permission
-          grep -q "FOREGROUND_SERVICE" android/src/main/AndroidManifest.xml && \
-            echo "✅ FOREGROUND_SERVICE declared" || \
-            (echo "❌ FOREGROUND_SERVICE missing" && exit 1)
+          check() {
+            local label="$1"; local pattern="$2"
+            if grep -q "$pattern" "$manifest"; then
+              echo "✅ $label"
+            else
+              echo "❌ MISSING: $label"
+              exit 1
+            fi
+          }
 
-          # Must declare WakeLock
-          grep -q "WAKE_LOCK" android/src/main/AndroidManifest.xml && \
-            echo "✅ WAKE_LOCK declared" || \
-            (echo "❌ WAKE_LOCK missing" && exit 1)
+          check "FOREGROUND_SERVICE permission"    "FOREGROUND_SERVICE"
+          check "WAKE_LOCK permission"             "WAKE_LOCK"
+          check "SCHEDULE_EXACT_ALARM permission"  "SCHEDULE_EXACT_ALARM"
+          check "RECEIVE_BOOT_COMPLETED permission" "RECEIVE_BOOT_COMPLETED"
+          check "BackgroundTimerService declared"  "BackgroundTimerService"
+          check "AlarmReceiver declared"           "AlarmReceiver"
+          check "BootReceiver declared"            "BootReceiver"
 
-      - name: Validate namespace in build.gradle (AGP 8+ requirement)
+      - name: Validate AGP 8 namespace in build.gradle
         run: |
-          grep -q 'namespace "com.rick427.backgroundtimer"' android/build.gradle && \
-            echo "✅ namespace declared" || \
-            (echo "❌ namespace missing from build.gradle (required for AGP 8+)" && exit 1)
+          if grep -q 'namespace "com.rick427.backgroundtimer"' android/build.gradle; then
+            echo "✅ namespace declared (AGP 8+ requirement)"
+          else
+            echo "❌ namespace missing from build.gradle"
+            exit 1
+          fi
+
+      - name: Validate minSdk is 26 (Android 8+)
+        run: |
+          if grep -q 'minSdk 26' android/build.gradle; then
+            echo "✅ minSdk 26 declared"
+          else
+            echo "❌ minSdk 26 not found — required for Foreground Services"
+            exit 1
+          fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Job 4: iOS — podspec & Swift source validation
-# Full pod compile requires Xcode + RN installed. We do structural checks.
+# Job 4: iOS — Swift source & podspec validation
+# Full pod compile requires Xcode + RN; we validate structure & key APIs.
 # ─────────────────────────────────────────────────────────────────────────────
   ios-validate:
     name: iOS Validate
@@ -143,12 +159,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Validate Swift source files
+      - name: Validate required Swift and ObjC files exist
         run: |
-          echo "=== Swift source files ==="
-          find ios -name "*.swift" -o -name "*.m" -o -name "*.h" | sort
-
-          echo "=== Checking required files exist ==="
           required=(
             "ios/RNBackgroundTimer.swift"
             "ios/RNBackgroundTimer.m"
@@ -158,41 +170,61 @@ jobs:
             "ios/TimerStore.swift"
             "ios/background-timer.podspec"
           )
+          failed=0
           for f in "${required[@]}"; do
             if [ -f "$f" ]; then
               echo "  ✅ $f"
             else
               echo "  ❌ MISSING: $f"
-              exit 1
+              failed=1
             fi
           done
+          exit $failed
 
-      - name: Validate podspec structure
+      - name: Validate podspec required fields
         run: |
-          echo "=== background-timer.podspec ==="
-          cat ios/background-timer.podspec
+          podspec="ios/background-timer.podspec"
 
-          # Check required podspec fields
-          grep -q "s.name" ios/background-timer.podspec && \
-            echo "✅ name declared" || (echo "❌ name missing" && exit 1)
+          check_field() {
+            local label="$1"; local pattern="$2"
+            if grep -q "$pattern" "$podspec"; then
+              echo "✅ $label"
+            else
+              echo "❌ MISSING: $label"
+              exit 1
+            fi
+          }
 
-          grep -q "s.version" ios/background-timer.podspec && \
-            echo "✅ version declared" || (echo "❌ version missing" && exit 1)
+          check_field "name"           "s.name"
+          check_field "version"        "s.version"
+          check_field "iOS 13 min"     "ios.*13"
+          check_field "Swift version"  "SWIFT_VERSION"
+          check_field "React-Core dep" "React-Core"
 
-          grep -q "s.platforms.*ios.*13" ios/background-timer.podspec && \
-            echo "✅ iOS 13 minimum declared" || \
-            (echo "❌ iOS 13 minimum missing from podspec" && exit 1)
-
-          grep -q "React-Core" ios/background-timer.podspec && \
-            echo "✅ React-Core dependency declared" || \
-            (echo "❌ React-Core missing" && exit 1)
-
-      - name: Validate BGTaskScheduler usage in Swift
+      - name: Validate BGTaskScheduler is used
         run: |
-          grep -q "BGTaskScheduler" ios/BGTaskManager.swift && \
-            echo "✅ BGTaskScheduler used in BGTaskManager" || \
-            (echo "❌ BGTaskScheduler not found" && exit 1)
+          if grep -q "BGTaskScheduler" ios/BGTaskManager.swift; then
+            echo "✅ BGTaskScheduler used in BGTaskManager.swift"
+          else
+            echo "❌ BGTaskScheduler not found in BGTaskManager.swift"
+            exit 1
+          fi
 
-          grep -q "beginBackgroundTask" ios/RNBackgroundTimer.swift && \
-            echo "✅ UIBackgroundTask used" || \
-            (echo "❌ UIBackgroundTask not found" && exit 1)
+      - name: Validate UIBackgroundTask is used
+        run: |
+          if grep -q "beginBackgroundTask" ios/RNBackgroundTimer.swift; then
+            echo "✅ UIBackgroundTask (beginBackgroundTask) used in RNBackgroundTimer.swift"
+          else
+            echo "❌ beginBackgroundTask not found in RNBackgroundTimer.swift"
+            exit 1
+          fi
+
+      - name: Validate Turbo Module ObjC bridge declarations
+        run: |
+          bridge="ios/RNBackgroundTimer.m"
+          if grep -q "RCT_EXTERN_MODULE" "$bridge"; then
+            echo "✅ RCT_EXTERN_MODULE declared"
+          else
+            echo "❌ RCT_EXTERN_MODULE not found in $bridge"
+            exit 1
+          fi

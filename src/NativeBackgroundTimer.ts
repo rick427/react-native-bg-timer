@@ -132,4 +132,4 @@ export interface Spec extends TurboModule {
   requestExactAlarmPermission: () => void;
 }
 
-export default TurboModuleRegistry.strictGet<Spec>('RNBackgroundTimer');
+export default TurboModuleRegistry.getEnforcing<Spec>('RNBackgroundTimer');
