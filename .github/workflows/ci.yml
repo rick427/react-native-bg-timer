@@ -69,7 +69,7 @@ jobs:
           ls lib/module/
 
           echo "=== Types ==="
-          ls lib/typescript/src/
+          ls lib/typescript/
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Job 3: Android — structure & manifest validation
