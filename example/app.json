@@ -1,0 +1,42 @@
+{
+  "expo": {
+    "name": "BGTimerExample",
+    "slug": "bg-timer-example",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "scheme": "bgtimer",
+    "splash": {
+      "backgroundColor": "#0F172A"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.rick427.bgtimer.example",
+      "infoPlist": {
+        "UIBackgroundModes": ["processing", "fetch"]
+      }
+    },
+    "android": {
+      "package": "com.rick427.bgtimer.example",
+      "adaptiveIcon": {
+        "backgroundColor": "#0F172A"
+      }
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "@rick427/background-timer",
+        {
+          "taskIdentifiers": [
+            "com.rick427.bgtimer.example.session-timeout",
+            "com.rick427.bgtimer.example.otp-expiry"
+          ]
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
